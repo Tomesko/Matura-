@@ -59,6 +59,68 @@ class Enemy(pygame.sprite.Sprite):
 TILE_SIZE = 40
 dungeon = [[0 for _ in range(WIDTH // TILE_SIZE)] for _ in range(HEIGHT // TILE_SIZE)]
 # TODO: Udělej generátor dungeonů (místnosti + chodby)
+#random tile
+import random 
+
+#dungeon dimensions
+dungeon_width = 35
+dungeon_height = 35
+
+#room size
+room_min_size = 5
+room_max_size = 10
+
+#number of rooms to attept to create
+max_rooms = 4
+
+class room: 
+    def _init_(self, x, y, w, h):
+        self.x = x #left 
+        self.y = y #top
+        self.w = w #width
+        self.h = h #height
+
+  def intersects(self, other):
+        # Returns True if this room overlaps with another room
+        return (self.x <= other.x + other.w and
+                self.x + self.w >= other.x and
+                self.y <= other.y + other.h and
+                self.y + self.h >= other.y)
+
+def create_dungeon():
+    # Initialize dungeon grid with walls represented by '#'
+    dungeon = [['#' for _ in range(DUNGEON_WIDTH)] for _ in range(DUNGEON_HEIGHT)]
+    rooms = []
+
+    for _ in range(MAX_ROOMS):
+        w = random.randint(ROOM_MIN_SIZE, ROOM_MAX_SIZE)
+        h = random.randint(ROOM_MIN_SIZE, ROOM_MAX_SIZE)
+        x = random.randint(1, DUNGEON_WIDTH - w - 1)
+        y = random.randint(1, DUNGEON_HEIGHT - h - 1)
+
+        new_room = Room(x, y, w, h)
+
+        # Check for overlap with existing rooms
+        if any(new_room.intersects(other) for other in rooms):
+            continue  # skip this room, it overlaps
+
+        # If no overlap, add room to list
+        rooms.append(new_room)
+
+        # Carve out the room in the dungeon grid
+        for i in range(y, y + h):
+            for j in range(x, x + w):
+                dungeon[i][j] = '.'
+
+    return dungeon
+
+def print_dungeon(dungeon):
+    for row in dungeon:
+        print(''.join(row))
+
+if __name__ == "__main__":
+    dungeon = create_dungeon()
+    print_dungeon(dungeon)
 
 # Sprite skupiny
 all_sprites = pygame.sprite.Group()
@@ -106,3 +168,4 @@ while running:
     pygame.display.flip()
 
 pygame.quit()
+
