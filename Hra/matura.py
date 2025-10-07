@@ -26,9 +26,11 @@ class Player(pygame.sprite.Sprite):
         self.rect.topleft = (x, y)
         self.speed = 4
         self.hp = 10
+        self.xp = 0
         # TODO: Přidej třeba inventář nebo XP systém
 
-    def update(self, keys):
+    def update(self):
+        keys = pygame.key.get_pressed()
         if keys[pygame.K_LEFT]:
             self.rect.x -= self.speed
         if keys[pygame.K_RIGHT]:
@@ -64,7 +66,7 @@ dungeon = [[0 for _ in range(WIDTH // TILE_SIZE)] for _ in range(HEIGHT // TILE_
 all_sprites = pygame.sprite.Group()
 enemies = pygame.sprite.Group()
 
-player = Player(100, 100)
+player: Player = Player(100, 100)
 all_sprites.add(player)
 
 # Spawn nepřátel
@@ -83,10 +85,11 @@ while running:
         if event.type == pygame.QUIT:
             running = False
 
-    keys = pygame.key.get_pressed()
+    all_sprites.update()
 
     # Update
-    all_sprites.update(keys)
+
+
 
     # Kolize hráč vs. nepřítel
     hits = pygame.sprite.spritecollide(player, enemies, False)
