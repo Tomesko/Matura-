@@ -4,7 +4,7 @@ import math
 import time
 import sqlite3
 import datetime
-import pickle # Knihovna pro ukládání stavu hry
+import pickle
 import os
 
 # --- KONFIGURACE ---
@@ -12,18 +12,21 @@ WIDTH, HEIGHT = 1000, 800
 TILE_SIZE = 60
 FPS = 60
 
-# --- BARVY ---
+# --- BARVY (SOLO LEVELING NEON PALETTE) ---
 BG_COLOR = (5, 8, 15)
 GRID_COLOR = (20, 25, 40)
-NEON_BLUE = (0, 190, 255)
-NEON_RED = (255, 40, 40)
-NEON_GOLD = (255, 215, 0)
-NEON_PURPLE = (180, 50, 255)
-NEON_GREEN = (50, 255, 100)
-NEON_GRAY = (100, 100, 120)
+
+# Neony
+NEON_BLUE = (0, 190, 255)     # System / Player / Mana
+NEON_RED = (255, 40, 40)      # Enemy / Danger / HP
+NEON_GOLD = (255, 215, 0)     # Boss / S-Rank / Level
+NEON_PURPLE = (180, 50, 255)  # Magic / Shadows
+NEON_GREEN = (50, 255, 100)   # Buffs / Exit / Load
+NEON_GRAY = (100, 100, 120)   # Walls / Weak
+
+# Texty
 TXT_WHITE = (240, 240, 255)
 TXT_GRAY = (150, 150, 170)
-MANA_BLUE = (0, 100, 255) # Barva many
 
 # --- BESTIÁŘ ---
 DEMON_TYPES = [
@@ -37,27 +40,26 @@ DEMON_TYPES = [
 
 # --- DEFINICE SKILLŮ ---
 # Skill: (Jméno, Mana Cost, Cooldown, Damage Mult/Effect, Typ)
-# Typy: "DMG" (Poškození), "HEAL" (Léčení), "BUFF" (Obrana/Síla)
 SKILLS_DB = {
     "FIGHTER": {
-        "Q": ("Smash", 10, 3, 2.0, "DMG"),       # 200% DMG
-        "W": ("Iron Skin", 15, 5, 10, "BUFF"),   # +10 DEF (Permanent until hit? Zjednodušíme na heal/repair)
-        "E": ("War Cry", 20, 8, 0.5, "HEAL")     # Heal 50% max HP
+        "Q": ("Smash", 10, 3, 2.0, "DMG"),       
+        "W": ("Iron Skin", 15, 5, 10, "BUFF"),   
+        "E": ("War Cry", 20, 8, 0.5, "HEAL")     
     },
     "ASSASSIN": {
         "Q": ("Vital Strike", 10, 2, 1.5, "DMG"),
-        "W": ("Poison Edge", 15, 4, 2.5, "DMG"), # High DMG
-        "E": ("Shadow Step", 20, 6, 0, "ESCAPE") # Instant Escape (Success 100%)
+        "W": ("Poison Edge", 15, 4, 2.5, "DMG"), 
+        "E": ("Shadow Step", 20, 6, 0, "ESCAPE") 
     },
     "MAGE": {
-        "Q": ("Fireball", 15, 2, 2.5, "DMG"),    # High DMG, low CD, high Mana
-        "W": ("Ice Barrier", 20, 5, 20, "BUFF"), # +20 Temp HP/DEF
-        "E": ("Meteor", 50, 10, 5.0, "DMG")      # Ultimate Nuke
+        "Q": ("Fireball", 15, 2, 2.5, "DMG"),    
+        "W": ("Ice Barrier", 20, 5, 20, "BUFF"), 
+        "E": ("Meteor", 50, 10, 5.0, "DMG")      
     },
     "MONARCH": {
         "Q": ("Dominator's Touch", 10, 1, 2.0, "DMG"),
         "W": ("Ruler's Authority", 20, 4, 3.0, "DMG"),
-        "E": ("Full Recovery", 50, 10, 1.0, "HEAL") # Full Heal
+        "E": ("Full Recovery", 50, 10, 1.0, "HEAL") 
     }
 }
 
@@ -83,7 +85,7 @@ CLASSES = {
 
 # --- DATABÁZE ---
 class DatabaseManager:
-    def __init__(self, db_name="sololeveling_v14.db"):
+    def __init__(self, db_name="sololeveling_v14_neon.db"):
         self.conn = sqlite3.connect(db_name)
         self.cursor = self.conn.cursor()
         self.create_table()
@@ -131,7 +133,7 @@ class Player:
         self.current_mana = 0
         self.total_def = 0
         
-        # Skill Cooldowns (Dictionary: "Q": 0, "W": 0...)
+        # Skill Cooldowns
         self.cooldowns = {"Q": 0, "W": 0, "E": 0}
         
         self.recalculate()
@@ -147,12 +149,10 @@ class Player:
         if self.current_mana > self.max_mana: self.current_mana = self.max_mana
 
     def tick_cooldowns(self):
-        # Sníží všechny cooldowny o 1
         for k in self.cooldowns:
             if self.cooldowns[k] > 0: self.cooldowns[k] -= 1
-        
         # Regenerace many (5% za tah)
-        regen = int(self.max_mana * 0.05)
+        regen = max(1, int(self.max_mana * 0.05))
         self.current_mana = min(self.max_mana, self.current_mana + regen)
 
     def attack(self):
@@ -160,7 +160,9 @@ class Player:
         stat = self.stats.get(self.weapon.scaling_stat, 10)
         bonus = int(stat * self.weapon.scaling_rank)
         total = base + bonus
-        is_crit = random.randint(1, 100) <= min(self.stats["sense"], 50)
+        
+        crit_chance = min(self.stats["sense"], 50)
+        is_crit = random.randint(1, 100) <= crit_chance
         if is_crit: total = int(total * 1.5)
         return total, is_crit
 
@@ -172,7 +174,8 @@ class Player:
     
     def get_power_rating(self):
         avg_dmg = (self.weapon.min_dmg + self.weapon.max_dmg) / 2
-        return self.max_hp + (avg_dmg * 6) + (self.total_def * 5)
+        stat_bonus = self.stats[self.weapon.scaling_stat] * self.weapon.scaling_rank
+        return self.max_hp + ((avg_dmg + stat_bonus) * 6) + (self.total_def * 5)
 
 class Enemy:
     def __init__(self, floor, is_boss=False):
@@ -191,11 +194,12 @@ class Enemy:
             avail = [e for e in DEMON_TYPES if e[1] <= floor]
             if not avail: avail = [DEMON_TYPES[0]]
             choice = random.choice(avail)
-            self.name, _, self.color, bhp, bdmg, bxp, bsouls = choice
-            self.hp = int(bhp * scale)
-            self.dmg = int(bdmg * scale)
-            self.xp = int(bxp * scale)
-            self.souls = int(bsouls * scale)
+            self.name = choice[0]
+            self.color = choice[2]
+            self.hp = int(choice[3] * scale)
+            self.dmg = int(choice[4] * scale)
+            self.xp = int(20 * scale)
+            self.souls = int(choice[5] * scale)
         self.max_hp = self.hp
 
     def get_power_rating(self):
@@ -225,7 +229,7 @@ class Game:
     def __init__(self):
         pygame.init()
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
-        pygame.display.set_caption("Solo Leveling: Arise (Save & Skills)")
+        pygame.display.set_caption("Solo Leveling: Ultimate Neon Edition")
         self.clock = pygame.time.Clock()
         self.font = pygame.font.Font(None, 24)
         self.title_font = pygame.font.Font(None, 40)
@@ -236,7 +240,7 @@ class Game:
         self.selected_class = "FIGHTER"
         self.reset_game_data()
         
-        self.save_file = "savegame.dat"
+        self.save_file = "savegame_neon.dat"
 
     def reset_game_data(self):
         self.player = None
@@ -251,32 +255,21 @@ class Game:
         self.pending_level_up = False
         self.store = [("Healing Stone", 100), ("Killer Dagger", 500), ("STR Boost", 300), ("AGI Boost", 300)]
 
-    # --- SAVE & LOAD SYSTEM ---
     def save_game(self):
         data = {
-            "player": self.player,
-            "floor": self.floor,
-            "map": self.map,
-            "log": self.log,
-            "has_key": self.has_key,
-            "boss_spawned": self.boss_spawned,
-            "boss_active": self.boss_active,
-            "boss_coords": self.boss_coords,
-            "store": self.store
+            "player": self.player, "floor": self.floor, "map": self.map,
+            "log": self.log, "has_key": self.has_key, "boss_spawned": self.boss_spawned,
+            "boss_active": self.boss_active, "boss_coords": self.boss_coords, "store": self.store
         }
         try:
-            with open(self.save_file, "wb") as f:
-                pickle.dump(data, f)
-            print("Game Saved.")
-            self.add_log("SYSTEM: Game Saved.")
-        except Exception as e:
-            print(f"Save failed: {e}")
+            with open(self.save_file, "wb") as f: pickle.dump(data, f)
+            self.add_log("SYSTEM: Game Auto-Saved.")
+        except Exception as e: print(f"Save failed: {e}")
 
     def load_game(self):
         if not os.path.exists(self.save_file): return False
         try:
-            with open(self.save_file, "rb") as f:
-                data = pickle.load(f)
+            with open(self.save_file, "rb") as f: data = pickle.load(f)
             self.player = data["player"]
             self.floor = data["floor"]
             self.map = data["map"]
@@ -287,9 +280,7 @@ class Game:
             self.boss_coords = data.get("boss_coords", None)
             self.store = data.get("store", [])
             return True
-        except Exception as e:
-            print(f"Load failed: {e}")
-            return False
+        except: return False
 
     def check_shop_unlocks(self):
         if self.floor >= 5:
@@ -306,9 +297,7 @@ class Game:
         self.map = {(0,0): Room()}
         self.map[(0,0)].exits = {'N':True, 'S':True, 'E':True, 'W':True}
         self.log = ["SYSTEM: Welcome Player."]
-        self.has_key = False
-        self.boss_spawned = False
-        self.boss_active = False
+        self.has_key, self.boss_spawned, self.boss_active = False, False, False
         self.boss_coords = None
         self.player_moves = 0
         self.pending_level_up = False
@@ -320,16 +309,11 @@ class Game:
     def generate_room(self, x, y, from_dir):
         if (x,y) not in self.map:
             r = Room(from_dir)
-            if random.random() < (0.5 + self.floor*0.02) and (x!=0 or y!=0):
+            if random.random() < (0.5 + self.floor * 0.02) and (x!=0 or y!=0):
                 for _ in range(random.randint(1, 3)): r.enemies.append(Enemy(self.floor))
-            
-            dist = math.sqrt(x**2 + y**2)
-            if self.has_key and not self.boss_spawned and dist > 5:
-                boss = Enemy(self.floor, is_boss=True)
-                r.enemies = [boss]
-                self.boss_spawned = True
-                self.boss_active = True
-                self.boss_coords = (x, y)
+            if self.has_key and not self.boss_spawned and math.hypot(x,y) > 5:
+                r.enemies = [Enemy(self.floor, is_boss=True)]
+                self.boss_spawned, self.boss_active, self.boss_coords = True, True, (x, y)
                 self.add_log("WARNING: Boss Signature Detected!")
             self.map[(x,y)] = r
 
@@ -339,27 +323,23 @@ class Game:
         px, py = self.player.grid_x, self.player.grid_y
         if (bx, by) == (px, py): return
 
-        new_bx, new_by = bx, by
-        if bx < px: new_bx += 1
-        elif bx > px: new_bx -= 1
-        if new_bx == bx:
-            if by < py: new_by += 1
-            elif by > py: new_by -= 1
+        nbx, nby = bx, by
+        if bx < px: nbx += 1
+        elif bx > px: nbx -= 1
+        if nbx == bx:
+            if by < py: nby += 1
+            elif by > py: nby -= 1
         
-        if (new_bx, new_by) in self.map:
-            old_room = self.map[(bx, by)]
-            target_room = self.map[(new_bx, new_by)]
+        if (nbx, nby) in self.map:
+            old_room, target_room = self.map[(bx, by)], self.map[(nbx, nby)]
             boss_obj = next((e for e in old_room.enemies if e.is_boss), None)
-            
             if boss_obj:
                 old_room.enemies.remove(boss_obj)
                 target_room.enemies.append(boss_obj)
-                self.boss_coords = (new_bx, new_by)
-                if (new_bx, new_by) == (px, py):
+                self.boss_coords = (nbx, nby)
+                if (nbx, nby) == (px, py):
                     self.add_log("ALERT: BOSS HAS FOUND YOU!")
                     self.state = "COMBAT"
-                else:
-                    self.add_log("ALERT: Boss is moving...")
 
     def move(self, dx, dy, d_str):
         curr = self.map[(self.player.grid_x, self.player.grid_y)]
@@ -375,34 +355,26 @@ class Game:
         
         self.player_moves += 1
         if self.player_moves % 2 == 0: self.move_boss()
-        
-        # Auto-Save po pohybu
         self.save_game()
         
-        new_r = self.map[(nx,ny)]
-        if new_r.enemies:
+        if self.map[(nx,ny)].enemies:
             self.state = "COMBAT"
-            self.add_log(f"ENEMIES: {len(new_r.enemies)} targets.")
+            self.add_log(f"ENEMIES: {len(self.map[(nx,ny)].enemies)} targets.")
 
     def combat(self, action):
         room = self.map[(self.player.grid_x, self.player.grid_y)]
         target = room.enemies[0]
-        turn_ended = True # Zda tah končí a nepřátelé útočí
+        turn_ended = True 
         
-        # --- ZPRACOVÁNÍ SKILLŮ ---
         if action in ["Q", "W", "E"]:
-            skill_def = SKILLS_DB[self.player.class_name][action]
-            s_name, s_cost, s_cd, s_val, s_type = skill_def
-            
-            # Check Mana & Cooldown
+            s_name, s_cost, s_cd, s_val, s_type = SKILLS_DB[self.player.class_name][action]
             if self.player.current_mana < s_cost:
                 self.add_log("SYSTEM: Not enough Mana!")
                 turn_ended = False
             elif self.player.cooldowns[action] > 0:
-                self.add_log(f"SYSTEM: {s_name} is on cooldown!")
+                self.add_log(f"SYSTEM: {s_name} is on CD!")
                 turn_ended = False
             else:
-                # USE SKILL
                 self.player.current_mana -= s_cost
                 self.player.cooldowns[action] = s_cd
                 self.add_log(f"SKILL: Used {s_name}!")
@@ -417,34 +389,30 @@ class Game:
                     self.player.current_hp = min(self.player.max_hp, self.player.current_hp + heal)
                     self.add_log(f"HEAL: Recovered {heal} HP.")
                 elif s_type == "BUFF":
-                    # Zjednodušení: Buff rovnou přidá stat nebo healne
-                    self.add_log(f"BUFF: Effect applied.")
+                    self.add_log("BUFF: Effect applied.")
                 elif s_type == "ESCAPE":
-                    room.enemies = [] # Instant escape
+                    room.enemies = [] 
                     self.state = "EXPLORE"
                     self.add_log("SYSTEM: Vanished into shadows!")
-                    return # Konec combatu hned
+                    return 
 
         elif action == "RUN":
             cost = 50 * self.floor
             if self.player.souls >= cost:
                 self.player.souls -= cost
-                if target.is_boss:
-                    self.player.grid_x, self.player.grid_y = self.player.prev_x, self.player.prev_y
-                else:
-                    room.enemies = [] 
+                if target.is_boss: self.player.grid_x, self.player.grid_y = self.player.prev_x, self.player.prev_y
+                else: room.enemies = [] 
                 self.state = "EXPLORE"
                 self.add_log("ESCAPED!")
                 return
             else: 
-                self.add_log("SYSTEM: Need Souls to escape.")
+                self.add_log("SYSTEM: Insufficient Souls.")
                 turn_ended = False
 
         elif action == "ATTACK":
             dmg, crit = self.player.attack()
             target.hp -= dmg
-            tag = " [CRIT]" if crit else ""
-            self.add_log(f"ATTACK: {dmg}{tag}")
+            self.add_log(f"ATTACK: {dmg}{' [CRIT]' if crit else ''}")
             
         elif action == "SHADOWS":
             dmg = self.player.use_shadows()
@@ -455,17 +423,14 @@ class Game:
                 self.add_log("SYSTEM: Need 3 Shadows.")
                 turn_ended = False
 
-        # --- VYHODNOCENÍ PO ÚTOKU ---
-        # Smaž mrtvé
+        # Zhodnocení mrtvých
         dead_enemies = [e for e in room.enemies if e.hp <= 0]
         room.enemies = [e for e in room.enemies if e.hp > 0]
         
         for e in dead_enemies:
             self.player.souls += e.souls
             self.player.xp += e.xp
-            if e.is_boss: 
-                self.boss_active = False
-                self.boss_coords = None
+            if e.is_boss: self.boss_active, self.boss_coords = False, None
             if random.random() < 0.3: self.player.shadows += 1
             if not self.has_key and random.random() < 0.1: 
                 self.has_key = True
@@ -477,39 +442,32 @@ class Game:
             if self.pending_level_up:
                 self.state = "LEVELUP"
                 self.pending_level_up = False
-                # Check Boss kill context
-                was_boss = any(e.is_boss for e in dead_enemies)
-                if was_boss:
+                if any(e.is_boss for e in dead_enemies):
                     self.next_state_after_levelup = "NEXT_FLOOR"
                     self.floor += 1
                     self.check_shop_unlocks()
-                else: 
-                    self.next_state_after_levelup = "EXPLORE"
+                else: self.next_state_after_levelup = "EXPLORE"
                 return
             
-            was_boss = any(e.is_boss for e in dead_enemies)
-            if was_boss:
+            if any(e.is_boss for e in dead_enemies):
                 self.floor += 1
                 self.check_shop_unlocks()
                 self.state = "NEXT_FLOOR"
             else: 
                 self.state = "EXPLORE"
-                self.save_game() # Save after fight
+                self.save_game() 
             return
 
-        # --- ENEMY TURN (Pokud hráč něco udělal) ---
+        # Tah nepřítele
         if turn_ended:
-            # Tick cooldowns
             self.player.tick_cooldowns()
-            
             dmg_taken = sum(max(1, e.dmg - self.player.total_def) for e in room.enemies)
             if dmg_taken > 0:
                 self.player.current_hp -= dmg_taken
                 self.add_log(f"DEFENSE: Took {dmg_taken} dmg.")
             if self.player.current_hp <= 0:
                 self.db.save_run(self.player.name, self.player.class_name, self.floor, self.player.level, self.player.souls)
-                # Smazat save při smrti (Roguelike)
-                if os.path.exists(self.save_file): os.remove(self.save_file)
+                if os.path.exists(self.save_file): os.remove(self.save_file) # Smaže save při smrti
                 self.state = "GAMEOVER"
 
     def get_name_color(self, enemy):
@@ -519,7 +477,7 @@ class Game:
         elif p_pow > e_pow * 1.5: return NEON_GRAY
         else: return NEON_GOLD
 
-    # --- DRAWING ---
+    # --- DRAWING SYSTEM ---
     def draw_bg(self):
         self.screen.fill(BG_COLOR)
         for x in range(0, WIDTH, 40): pygame.draw.line(self.screen, GRID_COLOR, (x, 0), (x, HEIGHT))
@@ -531,17 +489,23 @@ class Game:
         t = self.title_font.render("SOLO LEVELING", True, NEON_BLUE)
         self.screen.blit(t, (WIDTH//2 - t.get_width()//2, 50))
         
-        # Load Button
-        if os.path.exists(self.save_file):
-            t = self.font.render("[C] CONTINUE GAME", True, NEON_GREEN)
-            self.screen.blit(t, (WIDTH//2 - t.get_width()//2, 550))
+        pygame.draw.rect(self.screen, (0,0,0), (WIDTH//2 - 250, 120, 500, 250))
+        draw_glow_rect(self.screen, NEON_BLUE, (WIDTH//2 - 250, 120, 500, 250), 2)
         
-        t = self.font.render("[ENTER] NEW GAME", True, TXT_WHITE)
-        self.screen.blit(t, (WIDTH//2 - t.get_width()//2, 600))
+        scores = self.db.get_rankings()
+        y = 140
+        self.screen.blit(self.font.render("TOP HUNTERS", True, NEON_GOLD), (WIDTH//2-60, y))
+        y += 30
+        if scores:
+            for row in scores:
+                t = f"{row[2][:10]:<12} {row[3]:<8} Flr:{row[4]} Lvl:{row[5]}"
+                self.screen.blit(self.font.render(t, True, TXT_WHITE), (WIDTH//2 - 220, y))
+                y += 25
+        else:
+            self.screen.blit(self.font.render("No Data.", True, TXT_GRAY), (WIDTH//2-40, y))
 
-        # Class Selection
         cx = WIDTH // 2 - 200
-        cy = 400
+        cy = 420
         classes = ["FIGHTER", "ASSASSIN", "MAGE"]
         for i, c in enumerate(classes):
             col = NEON_GOLD if self.selected_class == c else NEON_GRAY
@@ -549,28 +513,47 @@ class Game:
             pygame.draw.rect(self.screen, (10,10,20), rect)
             draw_glow_rect(self.screen, col, rect, 2 if self.selected_class == c else 1)
             self.screen.blit(self.font.render(c, True, col), (cx + i*140 + 15, cy+20))
+        
+        if self.selected_class == "MONARCH":
+            self.screen.blit(self.font.render(">>> SECRET CLASS ACTIVE <<<", True, NEON_PURPLE), (WIDTH//2-140, 500))
+
+        # Tlačítka
+        if os.path.exists(self.save_file):
+            t = self.title_font.render("[C] CONTINUE GAME", True, NEON_GREEN)
+            self.screen.blit(t, (WIDTH//2 - t.get_width()//2, 570))
+        t2 = self.font.render("Press [ENTER] for NEW GAME", True, TXT_WHITE)
+        self.screen.blit(t2, (WIDTH//2 - t2.get_width()//2, 630))
 
     def draw_game(self):
         self.draw_bg()
-        # Map Drawing
         cx, cy = WIDTH // 2, HEIGHT // 2
+        
         for dy in range(-5, 6):
             for dx in range(-5, 6):
                 gx, gy = self.player.grid_x + dx, self.player.grid_y - dy
                 sx, sy = cx + dx*TILE_SIZE, cy + dy*TILE_SIZE
+                
                 if (gx, gy) in self.map:
                     room = self.map[(gx, gy)]
-                    col = NEON_RED if room.enemies else NEON_GRAY
-                    draw_glow_rect(self.screen, col, (sx, sy, TILE_SIZE, TILE_SIZE), 1, 5)
-                    if room.enemies:
-                        c = NEON_GOLD if room.enemies[0].is_boss else NEON_RED
-                        pygame.draw.circle(self.screen, c, (sx+30, sy+30), 10)
-        pygame.draw.circle(self.screen, NEON_BLUE, (cx+30, cy+30), 12)
+                    has_enemy = len(room.enemies) > 0
+                    color = NEON_RED if has_enemy else NEON_GRAY
+                    pygame.draw.rect(self.screen, (10,10,15), (sx, sy, TILE_SIZE, TILE_SIZE))
+                    draw_glow_rect(self.screen, color, (sx, sy, TILE_SIZE, TILE_SIZE), 1, 5)
+                    
+                    if has_enemy:
+                        ec = NEON_GOLD if room.enemies[0].is_boss else NEON_RED
+                        pygame.draw.circle(self.screen, ec, (sx+30, sy+30), 10 + len(room.enemies)*2)
 
-        # HUD
+        pygame.draw.circle(self.screen, NEON_BLUE, (cx+30, cy+30), 12)
+        s = pygame.Surface((40,40), pygame.SRCALPHA)
+        pygame.draw.circle(s, (*NEON_BLUE, 100), (20,20), 18)
+        self.screen.blit(s, (cx+10, cy+10))
+
+        # --- HUD ---
         px = WIDTH - 300
         pygame.draw.rect(self.screen, (5, 10, 15), (px, 0, 300, HEIGHT))
         pygame.draw.line(self.screen, NEON_BLUE, (px, 0), (px, HEIGHT), 2)
+        
         y = 20
         def txt(t, c=TXT_WHITE, sz=24):
             nonlocal y
@@ -579,53 +562,77 @@ class Game:
             y += sz + 5
 
         txt(f"FLOOR: {self.floor}", NEON_BLUE, 40)
-        txt(f"{self.player.name}", NEON_GOLD)
+        txt(f"{self.player.name}", TXT_WHITE)
+        txt(f"{self.player.class_name}", NEON_GOLD)
         y+=10
-        # Bars
+        
+        # HP & MANA BARS
         pygame.draw.rect(self.screen, (50,0,0), (px+20, y, 250, 15))
         pygame.draw.rect(self.screen, NEON_RED, (px+20, y, 250*(self.player.current_hp/self.player.max_hp), 15))
         y+=20
-        pygame.draw.rect(self.screen, (0,0,50), (px+20, y, 250, 15)) # MANA BAR
-        pygame.draw.rect(self.screen, MANA_BLUE, (px+20, y, 250*(self.player.current_mana/self.player.max_mana), 15))
+        pygame.draw.rect(self.screen, (0,0,50), (px+20, y, 250, 15))
+        pygame.draw.rect(self.screen, NEON_BLUE, (px+20, y, 250*(self.player.current_mana/self.player.max_mana), 15))
         y+=20
         
         txt(f"HP: {self.player.current_hp}/{self.player.max_hp}", NEON_RED)
-        txt(f"MP: {self.player.current_mana}/{self.player.max_mana}", MANA_BLUE)
-        y+=10
+        txt(f"MP: {int(self.player.current_mana)}/{self.player.max_mana}", NEON_BLUE)
         
-        # SKILLS DISPLAY
+        # XP BAR
+        y+=5
+        pygame.draw.rect(self.screen, (50,50,0), (px+20, y, 250, 6))
+        pygame.draw.rect(self.screen, NEON_GOLD, (px+20, y, 250*(self.player.xp/self.player.xp_next), 6))
+        y+=15
+        
+        txt(f"Souls: {self.player.souls}", NEON_PURPLE)
+        txt(f"Shadows: {self.player.shadows}", NEON_GRAY)
+        
+        y+=10
         txt("SKILLS", NEON_BLUE)
-        skill_keys = ["Q", "W", "E"]
-        for i, k in enumerate(skill_keys):
+        for k in ["Q", "W", "E"]:
             s_name, s_cost, _, _, _ = SKILLS_DB[self.player.class_name][k]
             cd = self.player.cooldowns[k]
             col = NEON_GOLD
-            suffix = ""
-            if cd > 0: 
-                col = TXT_GRAY; suffix = f" ({cd})"
-            elif self.player.current_mana < s_cost:
-                col = NEON_RED
-            
+            suffix = f" (-{s_cost} MP)"
+            if cd > 0: col = TXT_GRAY; suffix = f" (CD: {cd})"
+            elif self.player.current_mana < s_cost: col = NEON_RED
             self.screen.blit(self.font.render(f"[{k}] {s_name}{suffix}", True, col), (px+20, y))
             y+=25
         
         y+=10
-        # Log
+        txt("STATS", NEON_BLUE)
+        s = self.player.stats
+        txt(f"STR: {s['str']}  INT: {s['int']}", TXT_GRAY)
+        txt(f"AGI: {s['dex']}  VIT: {s['vigor']}", TXT_GRAY)
+        txt(f"SNS: {s['sense']}  DEF: {self.player.total_def}", TXT_GRAY)
+        
+        y+=10
+        txt("WEAPON", NEON_BLUE)
+        txt(f"{self.player.weapon.name} ({self.player.weapon.min_dmg}-{self.player.weapon.max_dmg})", TXT_WHITE)
+        
+        y+=15
+        curr = self.map.get((self.player.grid_x, self.player.grid_y))
+        if curr:
+            for d, pos in {'N':(100,0), 'S':(100,40), 'W':(60,20), 'E':(140,20)}.items():
+                c = NEON_GREEN if curr.exits[d] else NEON_RED
+                pygame.draw.rect(self.screen, c, (px+20+pos[0], y+pos[1], 20, 20))
+        y+=70
+        
         for l in self.log:
-            c = NEON_BLUE if "SYSTEM" in l else (NEON_RED if "COMBAT" in l else TXT_WHITE)
+            c = NEON_BLUE if "SYSTEM" in l else (NEON_RED if "COMBAT" in l or "DAMAGE" in l else TXT_WHITE)
             self.screen.blit(self.font.render(l, True, c), (20, HEIGHT - 250 + self.log.index(l)*25))
 
-        # Combat Overlay
         if self.state == "COMBAT":
+            cx, cy = WIDTH // 2, HEIGHT // 2
             e = self.map[(self.player.grid_x, self.player.grid_y)].enemies[0]
             col = self.get_name_color(e)
+            
             draw_glow_rect(self.screen, col, (cx-150, cy-150, 300, 100), 2)
             pygame.draw.rect(self.screen, (0,0,0), (cx-150, cy-150, 300, 100))
             self.screen.blit(self.title_font.render(e.name, True, col), (cx-100, cy-130))
             self.screen.blit(self.font.render(f"HP: {e.hp}/{e.max_hp}", True, TXT_WHITE), (cx-50, cy-90))
             
-            instr = "[SPACE] ATTACK   [Q/W/E] SKILLS"
-            self.screen.blit(self.font.render(instr, True, NEON_BLUE), (cx-120, cy+100))
+            self.screen.blit(self.font.render("[SPACE] ATTACK   [Q/W/E] SKILLS", True, NEON_BLUE), (cx-140, cy+100))
+            self.screen.blit(self.font.render("[S] ARISE   [U] ESCAPE", True, NEON_PURPLE), (cx-100, cy+130))
 
     def run(self):
         running = True
@@ -648,7 +655,7 @@ class Game:
                         if event.key == pygame.K_RETURN: 
                             self.start_game()
                             self.state = "EXPLORE"
-                        elif event.key == pygame.K_c: # CONTINUE
+                        elif event.key == pygame.K_c: 
                             if self.load_game():
                                 self.state = "EXPLORE"
                                 self.add_log("SYSTEM: Welcome back.")
@@ -675,49 +682,78 @@ class Game:
                     
                     elif self.state == "STORE":
                         if event.key == pygame.K_b: self.state = "EXPLORE"
-                        # (Zjednodušený store logic, pro úsporu místa stejný jako minule)
+                        elif event.key == pygame.K_DOWN: self.store_sel = (self.store_sel + 1) % len(self.store)
+                        elif event.key == pygame.K_UP: self.store_sel = (self.store_sel - 1) % len(self.store)
                         elif event.key == pygame.K_RETURN:
-                            # Basic healing buy logic
-                            if self.player.souls >= 100:
-                                self.player.souls -= 100
-                                self.player.inventory.append("Healing Stone")
-                                self.add_log("BOUGHT: Healing Stone")
+                            item = self.store[self.store_sel]
+                            name, cost = item
+                            if self.player.souls >= cost:
+                                self.player.souls -= cost
+                                if "Healing" in name or "Elixir" in name: self.player.inventory.append(name)
+                                elif "Dagger" in name or "Orb" in name or "Sword" in name: 
+                                    self.player.weapon = Weapon(name, int(cost/50), int(cost/30), "str", 1.5, cost)
+                                elif "Armor" in name:
+                                    self.player.stats["def"] += 5
+                                    self.player.recalculate()
+                                elif "Daily" in name:
+                                    if "Strength" in name: self.player.stats["str"] += 2
+                                    else: self.player.stats["dex"] += 2
+                                    self.player.recalculate()
+                                self.add_log(f"SYSTEM: Purchased {name}.")
+                            else: self.add_log("SYSTEM: Insufficient Souls.")
                     
                     elif self.state == "LEVELUP":
                         k = event.key
                         m = {pygame.K_1:'str', pygame.K_2:'dex', pygame.K_3:'int', pygame.K_4:'vigor', pygame.K_5:'sense'}
                         if k in m:
+                            for s in self.player.stats: self.player.stats[s] += 1
                             self.player.stats[m[k]] += 2
                             self.player.level += 1
                             self.player.xp -= self.player.xp_next
                             self.player.xp_next = int(self.player.xp_next * 1.2)
                             self.player.recalculate()
                             self.player.current_hp = self.player.max_hp
+                            self.player.current_mana = self.player.max_mana
                             self.state = self.next_state_after_levelup
+                            self.save_game()
                     
                     elif self.state == "NEXT_FLOOR":
                         if event.key == pygame.K_RETURN:
                             self.map = {(0,0): Room()}
                             self.map[(0,0)].exits = {'N':True, 'S':True, 'E':True, 'W':True}
                             self.player.grid_x, self.player.grid_y = 0, 0
-                            self.has_key, self.boss_spawned = False, False
+                            self.has_key = False
+                            self.boss_spawned = False
                             self.state = "EXPLORE"
                             self.save_game()
                     
                     elif self.state == "GAMEOVER":
-                        if event.key == pygame.K_RETURN: self.state = "MENU"
+                        if event.key == pygame.K_RETURN:
+                            self.reset_game_data()
+                            self.state = "MENU"
 
-            # DRAW
             self.draw_bg()
             if self.state == "INPUT_NAME":
                 t = self.title_font.render("ENTER NAME", True, NEON_BLUE)
                 self.screen.blit(t, (WIDTH//2 - 100, 300))
-                self.screen.blit(self.font.render(self.input_text, True, TXT_WHITE), (WIDTH//2 - 50, 350))
+                draw_glow_rect(self.screen, NEON_BLUE, (WIDTH//2 - 150, 350, 300, 50), 2)
+                self.screen.blit(self.font.render(self.input_text, True, TXT_WHITE), (WIDTH//2 - 140, 365))
             elif self.state == "MENU": self.draw_menu()
             elif self.state == "GAMEOVER":
                 t = self.title_font.render("YOU DIED", True, NEON_RED)
-                self.screen.blit(t, (WIDTH//2 - 100, 300))
-                self.screen.blit(self.font.render("[ENTER] Menu", True, TXT_WHITE), (WIDTH//2 - 80, 350))
+                self.screen.blit(t, (WIDTH//2 - 80, 300))
+                self.screen.blit(self.font.render("[ENTER] Menu", True, TXT_WHITE), (WIDTH//2 - 60, 360))
+            elif self.state == "STORE":
+                overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+                overlay.fill((0, 0, 0, 240))
+                self.screen.blit(overlay, (0,0))
+                self.screen.blit(self.title_font.render("SYSTEM STORE", True, NEON_BLUE), (100, 50))
+                self.screen.blit(self.font.render(f"Souls: {self.player.souls}", True, NEON_PURPLE), (100, 100))
+                for i, item in enumerate(self.store):
+                    col = NEON_GOLD if i == self.store_sel else TXT_WHITE
+                    txt = f"{item[0]} ... {item[1]} Souls"
+                    if i == self.store_sel: txt = "> " + txt
+                    self.screen.blit(self.font.render(txt, True, col), (100, 150 + i*40))
             elif self.state == "LEVELUP":
                 self.screen.blit(self.title_font.render("LEVEL UP!", True, NEON_GOLD), (WIDTH//2-80, 200))
                 opts = ["1. STR", "2. AGI", "3. INT", "4. VIT", "5. SENSE"]
@@ -725,7 +761,7 @@ class Game:
                     self.screen.blit(self.font.render(o, True, NEON_BLUE), (WIDTH//2-50, 250+i*30))
             elif self.state == "NEXT_FLOOR":
                 self.screen.blit(self.title_font.render("FLOOR CLEAR", True, NEON_GOLD), (WIDTH//2-100, 300))
-                self.screen.blit(self.font.render("[ENTER] Next Floor", True, TXT_WHITE), (WIDTH//2-80, 350))
+                self.screen.blit(self.font.render("[ENTER] Next Floor", True, TXT_WHITE), (WIDTH//2-70, 350))
             else: self.draw_game()
 
             pygame.display.flip()
