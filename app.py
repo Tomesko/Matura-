@@ -12,9 +12,10 @@ WIDTH, HEIGHT = 1000, 800
 TILE_SIZE = 60
 FPS = 60
 
-# --- BARVY ---
+# --- BARVY (SOLO LEVELING NEON PALETTE) ---
 BG_COLOR = (5, 8, 15)
 GRID_COLOR = (20, 25, 40)
+
 NEON_BLUE = (0, 190, 255)
 NEON_RED = (255, 40, 40)
 NEON_GOLD = (255, 215, 0)
@@ -26,19 +27,40 @@ TXT_GRAY = (150, 150, 170)
 MANA_BLUE = (0, 100, 255)
 
 # --- LOOT SYSTÉM ---
+LOOT_STANDARD = ["Demon Horn", "Torn Cloth", "Beast Fang", "Shadow Core", "Broken Bone", "Magic Dust", "Goblin Ear",
+                 "Wolf Pelt"]
+LOOT_CRAFTING = ["Iron Ore", "Magic Crystal"]
+
 LOOT_DB = {
     "Demon Horn": 15, "Torn Cloth": 5, "Beast Fang": 25,
-    "Shadow Core": 50, "Broken Bone": 10, "Magic Dust": 35
+    "Shadow Core": 50, "Broken Bone": 10, "Magic Dust": 35,
+    "Goblin Ear": 8, "Wolf Pelt": 12,
+    "Iron Ore": 10, "Magic Crystal": 20,
+    "Weapon Scraps": 150, "Armor Scraps": 100
+}
+
+# --- BOSS ZBRANĚ ---
+BOSS_WEAPONS = {
+    "Vulcan's Club": (15, 25, "str", 1.5, 1000),
+    "Metus' Scythe": (10, 30, "int", 1.6, 1500),
+    "Baran's Daggers": (20, 35, "dex", 1.8, 2500)
 }
 
 # --- BESTIÁŘ ---
 DEMON_TYPES = [
+    ("Goblin", 1, (100, 150, 100), 15, 3, 4, 5),
     ("Low Rank Demon", 1, (150, 150, 150), 20, 5, 5, 10),
+    ("Dire Wolf", 2, (120, 120, 150), 25, 6, 8, 12),
     ("Flying Demon", 3, (180, 120, 120), 30, 8, 10, 15),
+    ("Hobgoblin", 4, (100, 180, 100), 45, 12, 18, 25),
     ("Cerberus", 5, (200, 100, 50), 60, 15, 25, 50),
+    ("Shadow Beast", 7, (80, 80, 80), 70, 18, 30, 35),
     ("High Orc", 10, (50, 150, 50), 80, 20, 35, 40),
+    ("Vampire", 12, (200, 50, 50), 100, 25, 45, 60),
     ("Demon Knight", 15, (100, 100, 200), 120, 30, 60, 80),
+    ("Death Knight", 18, (80, 50, 150), 140, 40, 80, 100),
     ("Arch-Lich", 20, (150, 50, 200), 150, 50, 100, 150),
+    ("Bone Dragon", 25, (220, 220, 220), 200, 60, 150, 200),
 ]
 
 # --- DEFINICE SKILLŮ ---
@@ -83,9 +105,8 @@ class DatabaseManager:
         self.cursor.execute('SELECT * FROM users WHERE username=?', (username,))
         user = self.cursor.fetchone()
         if user is None:
-            self.cursor.execute('INSERT INTO users (username, password) VALUES (?, ?)', (username, password))
-            self.conn.commit()
-            return True
+            # Hráč neexistuje na webu, nepustíme ho do hry!
+            return False
         else:
             return user[1] == password
 
@@ -116,13 +137,14 @@ class Player:
 
         c = CLASSES[class_key]
         self.stats = c["stats"].copy()
-
         self.level, self.xp, self.xp_next = 1, 0, 100
         self.souls, self.shadows = 0, 0
-        self.stat_points = 0  # NOVÉ: Neutracené body atributů
+        self.stat_points = 0
+        self.has_holy_water = False
 
         w = c["weapon"]
         self.weapon = Weapon(w[0], w[1], w[2], w[3], w[4], w[5])
+        self.armor_name = "Basic Clothes"
         self.inventory = ["Healing Stone"]
 
         self.max_hp, self.current_hp = 0, 0
@@ -141,19 +163,16 @@ class Player:
         if self.current_hp > self.max_hp: self.current_hp = self.max_hp
         if self.current_mana > self.max_mana: self.current_mana = self.max_mana
 
-    # NOVÉ: Logika Level Upování oddělená pro čistší kód
     def check_level_up(self):
         leveled_up = False
         while self.xp >= self.xp_next:
             self.xp -= self.xp_next
             self.level += 1
-            self.stat_points += 5  # 5 Bodů za každý level!
+            self.stat_points += 5
             self.xp_next = int(self.xp_next * 1.2)
             leveled_up = True
-
         if leveled_up:
             self.recalculate()
-            # Automatické doléčení při level upu
             self.current_hp = self.max_hp
             self.current_mana = self.max_mana
         return leveled_up
@@ -163,6 +182,9 @@ class Player:
             if self.cooldowns[k] > 0: self.cooldowns[k] -= 1
         regen = max(1, int(self.max_mana * 0.05))
         self.current_mana = min(self.max_mana, self.current_mana + regen)
+        if self.has_holy_water:
+            hp_regen = max(2, int(self.max_hp * 0.05))
+            self.current_hp = min(self.max_hp, self.current_hp + hp_regen)
 
     def attack(self):
         base = random.randint(self.weapon.min_dmg, self.weapon.max_dmg)
@@ -180,7 +202,8 @@ class Player:
 
     def get_power_rating(self):
         avg_dmg = (self.weapon.min_dmg + self.weapon.max_dmg) / 2
-        return self.max_hp + (avg_dmg * 6) + (self.total_def * 5)
+        stat_bonus = self.stats[self.weapon.scaling_stat] * self.weapon.scaling_rank
+        return self.max_hp + ((avg_dmg + stat_bonus) * 6) + (self.total_def * 5)
 
 
 class Enemy:
@@ -200,10 +223,10 @@ class Enemy:
             self.xp, self.souls = int(500 * scale), int(300 * scale)
         else:
             avail = [e for e in DEMON_TYPES if e[1] <= floor] or [DEMON_TYPES[0]]
-            n, _, c, hp, d, x, s = random.choice(avail)
+            n, _, c, hp, d, xp_val, s = random.choice(avail)
             self.name, self.color = n, c
             self.hp, self.dmg = int(hp * scale), int(d * scale)
-            self.xp, self.souls = int(x * scale), int(s * scale)
+            self.xp, self.souls = int(xp_val * scale), int(s * scale)
         self.max_hp = self.hp
 
     def get_power_rating(self):
@@ -213,8 +236,11 @@ class Enemy:
 class Room:
     def __init__(self, from_dir=None):
         self.enemies = []
-        self.exits = {d: random.random() > 0.4 for d in "NSEW"}
-        if from_dir: self.exits[{'N': 'S', 'S': 'N', 'E': 'W', 'W': 'E'}[from_dir]] = True
+        self.exits = {'N': False, 'S': False, 'E': False, 'W': False}
+        for d in ['N', 'S', 'E', 'W']:
+            if random.random() > 0.4: self.exits[d] = True
+        if from_dir:
+            self.exits[{'N': 'S', 'S': 'N', 'E': 'W', 'W': 'E'}[from_dir]] = True
 
 
 # --- GRAPHICS HELPER ---
@@ -232,7 +258,7 @@ class Game:
     def __init__(self):
         pygame.init()
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
-        pygame.display.set_caption("Solo Leveling: MMO Edition")
+        pygame.display.set_caption("Solo Leveling: Arise")
         self.clock = pygame.time.Clock()
         self.font = pygame.font.Font(None, 24)
         self.title_font = pygame.font.Font(None, 40)
@@ -252,8 +278,9 @@ class Game:
         self.player, self.map, self.log = None, {}, []
         self.floor = 1
         self.has_key, self.boss_spawned, self.boss_active = False, False, False
-        self.boss_coords = None
-        self.player_moves = 0
+        self.boss_coords, self.player_moves = None, 0
+        self.inv_sel = 0
+        self.pending_level_up = False
         self.store = [("Healing Stone", 100), ("Killer Dagger", 500), ("STR Boost", 300), ("AGI Boost", 300)]
 
     def save_game(self):
@@ -272,9 +299,9 @@ class Game:
             with open(self.save_file, "rb") as f:
                 data = pickle.load(f)
             self.player = data["player"]
-
-            # OPRAVA KOMPATIBILITY (Pokud hráč načte starý save bez stat_points)
             if not hasattr(self.player, 'stat_points'): self.player.stat_points = 0
+            if not hasattr(self.player, 'has_holy_water'): self.player.has_holy_water = False
+            if not hasattr(self.player, 'armor_name'): self.player.armor_name = "Basic Clothes"
 
             if self.player.name != self.input_user: return False
             self.floor, self.map, self.log = data["floor"], data["map"], data["log"]
@@ -301,6 +328,7 @@ class Game:
         self.log = [f"SYSTEM: Welcome, Hunter {self.input_user}."]
         self.has_key, self.boss_spawned, self.boss_active = False, False, False
         self.boss_coords, self.player_moves = None, 0
+        self.pending_level_up = False
 
     def add_log(self, txt):
         self.log.append(txt)
@@ -322,6 +350,7 @@ class Game:
         bx, by = self.boss_coords
         px, py = self.player.grid_x, self.player.grid_y
         if (bx, by) == (px, py): return
+
         nbx, nby = bx, by
         if bx < px:
             nbx += 1
@@ -332,6 +361,7 @@ class Game:
                 nby += 1
             elif by > py:
                 nby -= 1
+
         if (nbx, nby) in self.map:
             old_room, target_room = self.map[(bx, by)], self.map[(nbx, nby)]
             boss_obj = next((e for e in old_room.enemies if e.is_boss), None)
@@ -364,6 +394,14 @@ class Game:
     def get_sellable_loot_value(self):
         return sum(LOOT_DB.get(item, 0) for item in self.player.inventory)
 
+    def count_item(self, item_name):
+        return sum(1 for i in self.player.inventory if i == item_name)
+
+    def remove_items(self, item_name, count):
+        for _ in range(count):
+            if item_name in self.player.inventory:
+                self.player.inventory.remove(item_name)
+
     def combat(self, action):
         room = self.map[(self.player.grid_x, self.player.grid_y)]
         target = room.enemies[0]
@@ -394,7 +432,7 @@ class Game:
                 elif s_type == "BUFF":
                     self.add_log("BUFF: Effect applied.")
                 elif s_type == "ESCAPE":
-                    room.enemies = [];
+                    self.player.grid_x, self.player.grid_y = self.player.prev_x, self.player.prev_y
                     self.state = "EXPLORE";
                     self.add_log("SYSTEM: Vanished into shadows!")
                     return
@@ -403,10 +441,7 @@ class Game:
             cost = 50 * self.floor
             if self.player.souls >= cost:
                 self.player.souls -= cost
-                if target.is_boss:
-                    self.player.grid_x, self.player.grid_y = self.player.prev_x, self.player.prev_y
-                else:
-                    room.enemies = []
+                self.player.grid_x, self.player.grid_y = self.player.prev_x, self.player.prev_y
                 self.state = "EXPLORE";
                 self.add_log("ESCAPED!");
                 return
@@ -428,26 +463,46 @@ class Game:
                 self.add_log("SYSTEM: Need 3 Shadows.");
                 turn_ended = False
 
-        # Hodnocení mrtvých a DROP LOOTU
         dead_enemies = [e for e in room.enemies if e.hp <= 0]
         room.enemies = [e for e in room.enemies if e.hp > 0]
 
         for e in dead_enemies:
             self.player.souls += e.souls
             self.player.xp += e.xp
-            if e.is_boss: self.boss_active, self.boss_coords = False, None
             if random.random() < 0.3: self.player.shadows += 1
 
-            if not e.is_boss and random.random() < 0.4:
-                drop = random.choice(list(LOOT_DB.keys()))
-                self.player.inventory.append(drop)
-                self.add_log(f"DROPPED: {drop}")
+            if e.is_boss:
+                self.boss_active, self.boss_coords = False, None
+                if e.name == "VULCAN" and random.random() < 0.3:
+                    self.player.inventory.append("Vulcan's Club")
+                    self.add_log("EPIC DROP: Vulcan's Club!")
+                elif e.name == "METUS" and random.random() < 0.3:
+                    self.player.inventory.append("Metus' Scythe")
+                    self.add_log("EPIC DROP: Metus' Scythe!")
+                elif e.name == "BARAN" and random.random() < 0.3:
+                    self.player.inventory.append("Baran's Daggers")
+                    self.add_log("EPIC DROP: Baran's Daggers!")
+
+                if self.floor == 10:
+                    self.player.inventory.append("Purified Blood")
+                elif self.floor == 20:
+                    self.player.inventory.append("World Tree Fragment")
+                elif self.floor == 30:
+                    self.player.inventory.append("Echoing Spring Water")
+
+            else:
+                if random.random() < 0.4:
+                    if random.random() < 0.5:
+                        drop = random.choice(LOOT_STANDARD)
+                    else:
+                        drop = random.choice(LOOT_CRAFTING)
+                    self.player.inventory.append(drop)
+                    self.add_log(f"DROPPED: {drop}")
 
             if not self.has_key and random.random() < 0.1:
                 self.has_key = True;
                 self.add_log("ITEM: Found Key.")
 
-        # --- KONTROLA LEVEL UPU NA POZADÍ ---
         if self.player.check_level_up():
             self.add_log("SYSTEM: LEVEL UP! Press [C] to Upgrade Stats.")
 
@@ -502,9 +557,16 @@ class Game:
                     col = NEON_RED if room.enemies else NEON_GRAY
                     pygame.draw.rect(self.screen, (10, 10, 15), (sx, sy, TILE_SIZE, TILE_SIZE))
                     draw_glow_rect(self.screen, col, (sx, sy, TILE_SIZE, TILE_SIZE), 1, 5)
+
                     if room.enemies:
                         ec = NEON_GOLD if room.enemies[0].is_boss else NEON_RED
-                        pygame.draw.circle(self.screen, ec, (sx + 30, sy + 30), 10 + len(room.enemies) * 2)
+                        radius = 10 + len(room.enemies) * 2
+                        pygame.draw.circle(self.screen, ec, (sx + 30, sy + 30), radius)
+
+                        # ČÍSLO POČTU NEPŘÁTEL NA MAPĚ
+                        num_txt = self.font.render(str(len(room.enemies)), True, (0, 0, 0))
+                        self.screen.blit(num_txt,
+                                         (sx + 30 - num_txt.get_width() // 2, sy + 30 - num_txt.get_height() // 2))
 
         pygame.draw.circle(self.screen, NEON_BLUE, (cx + 30, cy + 30), 12)
         s = pygame.Surface((40, 40), pygame.SRCALPHA)
@@ -532,7 +594,7 @@ class Game:
         pygame.draw.rect(self.screen, NEON_BLUE,
                          (px + 20, y, 250 * (self.player.current_mana / self.player.max_mana), 15));
         y += 20
-        txt(f"HP: {self.player.current_hp}/{self.player.max_hp}  MP: {int(self.player.current_mana)}/{self.player.max_mana}",
+        txt(f"HP: {int(self.player.current_hp)}/{self.player.max_hp}  MP: {int(self.player.current_mana)}/{self.player.max_mana}",
             TXT_WHITE)
 
         pygame.draw.rect(self.screen, (50, 50, 0), (px + 20, y, 250, 6))
@@ -540,7 +602,6 @@ class Game:
         y += 15
 
         txt(f"Souls: {self.player.souls}", NEON_PURPLE)
-        txt(f"Shadows: {self.player.shadows}", NEON_GRAY)
 
         y += 10;
         txt("SKILLS", NEON_BLUE)
@@ -557,13 +618,13 @@ class Game:
             y += 25
 
         y += 10
-        txt("[I] Inv   [C] Char   [H] Help", NEON_GREEN)
+        txt("[I] Inv  [C] Char  [K] Craft  [H] Help", NEON_GREEN)
 
-        # --- BLIKAJÍCÍ UPOZORNĚNÍ NA BODY ---
-        if self.player.stat_points > 0:
-            if int(time.time() * 2) % 2 == 0:
-                self.screen.blit(self.font.render(f"POINTS AVAILABLE: {self.player.stat_points} [C]", True, NEON_GOLD),
-                                 (px + 20, y))
+        if self.player.has_holy_water:
+            self.screen.blit(self.font.render("BUFF: Holy Water Regen", True, NEON_GREEN), (px + 20, y))
+        elif self.player.stat_points > 0 and int(time.time() * 2) % 2 == 0:
+            self.screen.blit(self.font.render(f"POINTS AVAILABLE: {self.player.stat_points} [C]", True, NEON_GOLD),
+                             (px + 20, y))
         y += 25
 
         y += 10
@@ -608,7 +669,7 @@ class Game:
                                 self.state = "MENU"
                                 self.login_error = ""
                             else:
-                                self.login_error = "Wrong Password! (New names auto-register)"
+                                self.login_error = "Invalid Login! Register on the WEBSITE first."
                         elif event.key == pygame.K_BACKSPACE:
                             if self.active_field == "user":
                                 self.input_user = self.input_user[:-1]
@@ -646,18 +707,17 @@ class Game:
                             self.state = "STORE"
                         elif event.key == pygame.K_i:
                             self.state = "INVENTORY"
+                            self.inv_sel = 0
                         elif event.key == pygame.K_h:
                             self.state = "HELP"
                         elif event.key == pygame.K_c:
-                            self.state = "CHARACTER"  # Otevřít Staty!
+                            self.state = "CHARACTER"
+                        elif event.key == pygame.K_k:
+                            self.state = "CRAFTING"
 
-                    elif self.state == "INVENTORY":
-                        if event.key in [pygame.K_i, pygame.K_ESCAPE]: self.state = "EXPLORE"
-
-                    elif self.state == "HELP":
+                    elif self.state in ["HELP"]:
                         if event.key in [pygame.K_h, pygame.K_ESCAPE]: self.state = "EXPLORE"
 
-                        # --- NOVÉ: ROZDĚLOVÁNÍ STATŮ ---
                     elif self.state == "CHARACTER":
                         if event.key in [pygame.K_c, pygame.K_ESCAPE]:
                             self.state = "EXPLORE"
@@ -673,7 +733,66 @@ class Game:
                             elif event.key == pygame.K_5:
                                 self.player.stats['sense'] += 1; self.player.stat_points -= 1
                             self.player.recalculate()
-                    # --------------------------------
+
+                    # --- ANIME INTERAKTIVNÍ INVENTÁŘ ---
+                    elif self.state == "INVENTORY":
+                        unique_items = sorted(list(set(self.player.inventory)))
+                        if event.key in [pygame.K_i, pygame.K_ESCAPE]:
+                            self.state = "EXPLORE"
+                        elif event.key == pygame.K_DOWN and unique_items:
+                            self.inv_sel = (self.inv_sel + 1) % len(unique_items)
+                        elif event.key == pygame.K_UP and unique_items:
+                            self.inv_sel = (self.inv_sel - 1) % len(unique_items)
+                        elif event.key == pygame.K_SPACE and unique_items:
+                            item = unique_items[self.inv_sel]
+                            val = LOOT_DB.get(item, 0)
+                            if item in BOSS_WEAPONS: val = BOSS_WEAPONS[item][4]
+
+                            if val > 0:
+                                self.player.souls += val
+                                self.player.inventory.remove(item)
+                                self.add_log(f"SOLD: 1x {item} (+{val} Souls)")
+                                unique_items = sorted(list(set(self.player.inventory)))
+                                if self.inv_sel >= len(unique_items): self.inv_sel = max(0, len(unique_items) - 1)
+                            else:
+                                self.add_log("SYSTEM: Cannot sell this item.")
+
+                        elif event.key == pygame.K_e and unique_items:
+                            item = unique_items[self.inv_sel]
+                            if item in BOSS_WEAPONS:
+                                self.player.inventory.append("Weapon Scraps")
+                                w = BOSS_WEAPONS[item]
+                                self.player.weapon = Weapon(item, w[0], w[1], w[2], w[3], w[4])
+                                self.player.inventory.remove(item)
+                                self.add_log(f"EQUIPPED: {item}")
+                                unique_items = sorted(list(set(self.player.inventory)))
+                                if self.inv_sel >= len(unique_items): self.inv_sel = max(0, len(unique_items) - 1)
+                                self.player.recalculate()
+
+                    elif self.state == "CRAFTING":
+                        if event.key in [pygame.K_k, pygame.K_ESCAPE]:
+                            self.state = "EXPLORE"
+                        elif event.key == pygame.K_1:
+                            if not self.player.has_holy_water:
+                                if self.count_item("Purified Blood") >= 1 and self.count_item(
+                                        "World Tree Fragment") >= 1 and self.count_item("Echoing Spring Water") >= 1:
+                                    self.remove_items("Purified Blood", 1);
+                                    self.remove_items("World Tree Fragment", 1);
+                                    self.remove_items("Echoing Spring Water", 1)
+                                    self.player.has_holy_water = True
+                                    self.add_log("SYSTEM: Holy Water of Life CRAFTED! (Perm Regen)")
+                                else:
+                                    self.add_log("SYSTEM: Missing Boss Materials.")
+                            else:
+                                self.add_log("SYSTEM: Already consumed Holy Water.")
+                        elif event.key == pygame.K_2:
+                            if self.count_item("Magic Crystal") >= 2 and self.count_item("Iron Ore") >= 1:
+                                self.remove_items("Magic Crystal", 2);
+                                self.remove_items("Iron Ore", 1)
+                                self.player.inventory.append("Healing Stone")
+                                self.add_log("SYSTEM: Healing Stone Crafted.")
+                            else:
+                                self.add_log("SYSTEM: Missing Materials.")
 
                     elif self.state == "COMBAT":
                         if event.key == pygame.K_SPACE:
@@ -699,7 +818,7 @@ class Game:
                             if val > 0:
                                 self.player.souls += val
                                 self.player.inventory = [i for i in self.player.inventory if i not in LOOT_DB]
-                                self.add_log(f"SOLD LOOT: +{val} Souls")
+                                self.add_log(f"SOLD ALL LOOT: +{val} Souls")
                         elif event.key == pygame.K_DOWN:
                             self.store_sel = (self.store_sel + 1) % len(self.store)
                         elif event.key == pygame.K_UP:
@@ -712,9 +831,15 @@ class Game:
                                 if "Healing" in name or "Elixir" in name:
                                     self.player.inventory.append(name)
                                 elif "Dagger" in name or "Orb" in name or "Sword" in name:
+                                    self.player.inventory.append("Weapon Scraps")
                                     self.player.weapon = Weapon(name, int(cost / 50), int(cost / 30), "str", 1.5, cost)
+                                    self.add_log("Old Weapon dismantled.")
                                 elif "Armor" in name:
-                                    self.player.stats["def"] += 5; self.player.recalculate()
+                                    self.player.inventory.append("Armor Scraps")
+                                    self.player.armor_name = name
+                                    self.player.stats["def"] += 5;
+                                    self.player.recalculate()
+                                    self.add_log("Old Armor dismantled.")
                                 elif "Daily" in name:
                                     if "Strength" in name:
                                         self.player.stats["str"] += 2
@@ -741,7 +866,6 @@ class Game:
 
             if self.state == "LOGIN":
                 self.screen.blit(self.title_font.render("SYSTEM LOGIN", True, NEON_BLUE), (WIDTH // 2 - 120, 200))
-
                 c_user = NEON_GREEN if self.active_field == "user" else NEON_BLUE
                 draw_glow_rect(self.screen, c_user, (WIDTH // 2 - 150, 280, 300, 40), 2)
                 self.screen.blit(self.font.render(f"User: {self.input_user}", True, TXT_WHITE), (WIDTH // 2 - 140, 290))
@@ -753,8 +877,8 @@ class Game:
 
                 self.screen.blit(self.font.render("[TAB] Switch Field   [ENTER] Login", True, TXT_GRAY),
                                  (WIDTH // 2 - 140, 430))
-                if self.login_error:
-                    self.screen.blit(self.font.render(self.login_error, True, NEON_RED), (WIDTH // 2 - 200, 480))
+                if self.login_error: self.screen.blit(self.font.render(self.login_error, True, NEON_RED),
+                                                      (WIDTH // 2 - 220, 480))
 
             elif self.state == "MENU":
                 cx, cy = WIDTH // 2 - 200, 420
@@ -775,7 +899,6 @@ class Game:
                 self.screen.blit(overlay, (0, 0))
                 self.screen.blit(self.title_font.render("SYSTEM STORE", True, NEON_BLUE), (100, 50))
                 self.screen.blit(self.font.render(f"Souls: {self.player.souls}", True, NEON_PURPLE), (100, 100))
-
                 sell_val = self.get_sellable_loot_value()
                 if sell_val > 0:
                     self.screen.blit(
@@ -783,7 +906,6 @@ class Game:
                         (100, 140))
                 else:
                     self.screen.blit(self.font.render("No loot to sell.", True, TXT_GRAY), (100, 140))
-
                 for i, item in enumerate(self.store):
                     col = NEON_GOLD if i == self.store_sel else TXT_WHITE
                     self.screen.blit(
@@ -801,17 +923,14 @@ class Game:
             else:
                 self.draw_game()
 
-                # --- OVERLAY CHARACTER (Staty) ---
                 if self.state == "CHARACTER":
                     overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA);
                     overlay.fill((0, 0, 0, 220));
                     self.screen.blit(overlay, (0, 0))
                     self.screen.blit(self.title_font.render("CHARACTER PROFILE", True, NEON_BLUE),
                                      (WIDTH // 2 - 150, 50))
-
                     self.screen.blit(self.font.render(f"Available Points: {self.player.stat_points}", True, NEON_GOLD),
                                      (WIDTH // 2 - 90, 120))
-
                     opts = [
                         (f"STR: {self.player.stats['str']}", "1", "+ DMG, Defense"),
                         (f"AGI: {self.player.stats['dex']}", "2", "+ Crit Damage"),
@@ -819,72 +938,127 @@ class Game:
                         (f"VIT: {self.player.stats['vigor']}", "4", "+ Max HP"),
                         (f"SNS: {self.player.stats['sense']}", "5", "+ Crit Chance")
                     ]
-
                     cy = 180
                     for text, key, desc in opts:
                         self.screen.blit(self.font.render(text, True, TXT_WHITE), (WIDTH // 2 - 200, cy))
                         self.screen.blit(self.font.render(desc, True, TXT_GRAY), (WIDTH // 2 - 80, cy))
-                        if self.player.stat_points > 0:
-                            self.screen.blit(self.font.render(f"Press [{key}] to Upgrade", True, NEON_GREEN),
-                                             (WIDTH // 2 + 100, cy))
+                        if self.player.stat_points > 0: self.screen.blit(
+                            self.font.render(f"Press [{key}] to Upgrade", True, NEON_GREEN), (WIDTH // 2 + 100, cy))
                         cy += 40
 
+                    self.screen.blit(self.font.render("--- EQUIPPED ---", True, NEON_GOLD), (WIDTH // 2 - 200, cy + 30))
+                    self.screen.blit(self.font.render(
+                        f"Weapon: {self.player.weapon.name} (DMG: {self.player.weapon.min_dmg}-{self.player.weapon.max_dmg})",
+                        True, TXT_WHITE), (WIDTH // 2 - 200, cy + 60))
+                    self.screen.blit(
+                        self.font.render(f"Armor: {self.player.armor_name} (Total DEF: {self.player.total_def})", True,
+                                         TXT_WHITE), (WIDTH // 2 - 200, cy + 90))
                     self.screen.blit(self.font.render("Press [C] or [ESC] to Close", True, NEON_RED),
-                                     (WIDTH // 2 - 120, HEIGHT - 100))
+                                     (WIDTH // 2 - 120, HEIGHT - 80))
 
-                # --- OVERLAY INVENTÁŘE ---
                 elif self.state == "INVENTORY":
                     overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA);
-                    overlay.fill((0, 0, 0, 220));
+                    overlay.fill((0, 0, 0, 230));
                     self.screen.blit(overlay, (0, 0))
-                    self.screen.blit(self.title_font.render("PLAYER INVENTORY", True, NEON_BLUE),
-                                     (WIDTH // 2 - 150, 50))
+                    self.screen.blit(self.title_font.render("SYSTEM INVENTORY", True, NEON_BLUE), (100, 50))
 
-                    self.screen.blit(self.font.render("--- EQUIPPED ---", True, NEON_GOLD), (WIDTH // 2 - 150, 120))
-                    self.screen.blit(self.font.render(f"Weapon: {self.player.weapon.name}", True, TXT_WHITE),
-                                     (WIDTH // 2 - 130, 150))
-                    self.screen.blit(self.font.render(
-                        f"Damage: {self.player.weapon.min_dmg} - {self.player.weapon.max_dmg} (+ scaling)", True,
-                        TXT_GRAY), (WIDTH // 2 - 130, 180))
-                    self.screen.blit(self.font.render(f"Total Defense: {self.player.total_def}", True, TXT_WHITE),
-                                     (WIDTH // 2 - 130, 210))
+                    counts = {i: self.player.inventory.count(i) for i in set(self.player.inventory)}
+                    unique_items = sorted(list(counts.keys()))
+                    if self.inv_sel >= len(unique_items) and unique_items: self.inv_sel = len(unique_items) - 1
 
-                    self.screen.blit(self.font.render("--- LOOT & ITEMS ---", True, NEON_GREEN),
-                                     (WIDTH // 2 - 150, 270))
-                    counts = {}
-                    for item in self.player.inventory: counts[item] = counts.get(item, 0) + 1
-
-                    iy = 300
-                    if not counts:
-                        self.screen.blit(self.font.render("Inventory is empty.", True, TXT_GRAY),
-                                         (WIDTH // 2 - 130, iy))
+                    iy = 120
+                    if not unique_items:
+                        self.screen.blit(self.font.render("Inventory is empty.", True, TXT_GRAY), (100, iy))
                     else:
-                        for item, count in counts.items():
-                            val = LOOT_DB.get(item, 0)
-                            val_txt = f"({val} Souls each)" if val > 0 else "(Consumable)"
-                            self.screen.blit(self.font.render(f"{count}x {item}  {val_txt}", True, TXT_WHITE),
-                                             (WIDTH // 2 - 130, iy))
+                        for i, item in enumerate(unique_items):
+                            col = NEON_GOLD if i == self.inv_sel else TXT_WHITE
+                            prefix = "> " if i == self.inv_sel else "  "
+                            self.screen.blit(self.font.render(f"{prefix}{counts[item]}x {item}", True, col), (100, iy))
                             iy += 30
 
-                    self.screen.blit(self.font.render("Press [I] or [ESC] to Close", True, NEON_RED),
+                    if unique_items:
+                        sel_item = unique_items[self.inv_sel]
+                        pygame.draw.rect(self.screen, (10, 15, 20), (500, 120, 400, 400))
+                        draw_glow_rect(self.screen, NEON_BLUE, (500, 120, 400, 400), 2)
+                        self.screen.blit(self.title_font.render(sel_item, True, NEON_GOLD), (520, 140))
+
+                        if sel_item in BOSS_WEAPONS:
+                            w = BOSS_WEAPONS[sel_item]
+                            self.screen.blit(self.font.render("Type: Rare Boss Weapon", True, NEON_PURPLE), (520, 190))
+                            self.screen.blit(self.font.render(f"Damage: {w[0]} - {w[1]}", True, TXT_WHITE), (520, 220))
+                            self.screen.blit(self.font.render(f"Scaling: {w[2].upper()} (x{w[3]})", True, NEON_GREEN),
+                                             (520, 250))
+                            self.screen.blit(self.font.render(f"Sell Value: {w[4]} Souls", True, TXT_GRAY), (520, 280))
+                            self.screen.blit(self.font.render("[E] to Equip   [SPACE] to Sell 1x", True, NEON_BLUE),
+                                             (520, 360))
+                        elif sel_item in LOOT_DB:
+                            val = LOOT_DB[sel_item]
+                            self.screen.blit(self.font.render("Type: Material / Loot", True, TXT_GRAY), (520, 190))
+                            self.screen.blit(self.font.render(f"Sell Value: {val} Souls", True, NEON_GOLD), (520, 220))
+                            self.screen.blit(self.font.render("[SPACE] to Sell 1x", True, NEON_BLUE), (520, 360))
+                        else:
+                            self.screen.blit(self.font.render("Type: Consumable / Material", True, NEON_GREEN),
+                                             (520, 190))
+                            self.screen.blit(self.font.render("Cannot be sold.", True, TXT_GRAY), (520, 220))
+
+                    self.screen.blit(self.font.render(f"Total Souls: {self.player.souls}", True, NEON_PURPLE),
+                                     (100, 90))
+                    self.screen.blit(
+                        self.font.render("Press [UP/DOWN] to browse  |  [I] or [ESC] to Close", True, NEON_RED),
+                        (WIDTH // 2 - 200, HEIGHT - 80))
+
+                elif self.state == "CRAFTING":
+                    overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA);
+                    overlay.fill((0, 0, 0, 230));
+                    self.screen.blit(overlay, (0, 0))
+                    self.screen.blit(self.title_font.render("CRAFTING SYSTEM", True, NEON_PURPLE),
+                                     (WIDTH // 2 - 150, 50))
+
+                    bld = self.player.inventory.count("Purified Blood");
+                    trf = self.player.inventory.count("World Tree Fragment")
+                    wat = self.player.inventory.count("Echoing Spring Water");
+                    ore = self.player.inventory.count("Iron Ore");
+                    cry = self.player.inventory.count("Magic Crystal")
+
+                    self.screen.blit(self.font.render(
+                        f"Your Materials: Blood({bld}) Tree({trf}) Water({wat}) | Ore({ore}) Crystal({cry})", True,
+                        TXT_GRAY), (WIDTH // 2 - 300, 100))
+
+                    self.screen.blit(self.font.render("[1] Craft: HOLY WATER OF LIFE", True, NEON_GOLD),
+                                     (WIDTH // 2 - 250, 160))
+                    self.screen.blit(
+                        self.font.render("Required: 1x Purified Blood, 1x World Tree Fragment, 1x Echoing Spring Water",
+                                         True, TXT_WHITE), (WIDTH // 2 - 230, 190))
+                    self.screen.blit(self.font.render("Effect: Permanent HP Regeneration in Combat", True, NEON_GREEN),
+                                     (WIDTH // 2 - 230, 220))
+                    if self.player.has_holy_water: self.screen.blit(
+                        self.font.render("STATUS: ALREADY CONSUMED", True, NEON_RED), (WIDTH // 2 + 100, 160))
+
+                    self.screen.blit(self.font.render("[2] Craft: HEALING STONE", True, NEON_BLUE),
+                                     (WIDTH // 2 - 250, 280))
+                    self.screen.blit(self.font.render("Required: 2x Magic Crystal, 1x Iron Ore", True, TXT_WHITE),
+                                     (WIDTH // 2 - 230, 310))
+                    self.screen.blit(self.font.render("Effect: Consumable Potion (Heals 50 HP)", True, NEON_GREEN),
+                                     (WIDTH // 2 - 230, 340))
+
+                    self.screen.blit(self.font.render("Press [K] or [ESC] to Close", True, NEON_RED),
                                      (WIDTH // 2 - 120, HEIGHT - 100))
 
-                # --- OVERLAY NÁPOVĚDY ---
                 elif self.state == "HELP":
                     overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA);
                     overlay.fill((0, 0, 0, 220));
                     self.screen.blit(overlay, (0, 0))
                     self.screen.blit(self.title_font.render("SYSTEM CONTROLS", True, NEON_BLUE), (WIDTH // 2 - 150, 50))
-
                     controls = [
                         ("[ARROWS]", "Move through the Dungeon"),
-                        ("[SPACE]", "Basic Attack in Combat / Sell Loot in Store"),
+                        ("[SPACE]", "Attack in Combat / Sell All Loot in Store"),
                         ("[Q], [W], [E]", "Use Class Skills (Requires Mana)"),
                         ("[S]", "Arise! Shadow Extraction AOE Attack"),
                         ("[H]", "Use Healing Potion in Combat"),
-                        ("[U]", "Escape from Combat (Costs Souls)"),
-                        ("[C]", "Open Character Stats / Level Up"),
-                        ("[I]", "Open Inventory & Equipment"),
+                        ("[U]", "Retreat from Combat (Costs Souls, Enemies stay)"),
+                        ("[C]", "Open Character Stats & Equipment"),
+                        ("[I]", "Open Interactive Inventory"),
+                        ("[K]", "Open Crafting Menu"),
                         ("[B]", "Open Store (Only outside combat)"),
                     ]
                     cy = 150
